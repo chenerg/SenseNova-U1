@@ -97,6 +97,72 @@ Outputs are written to `RUN/$JOB_NAME/$TIMESTAMP/{logs,tensorboards,shell}/`.
 A successful run prints `step=0 loss=…` after model load and dataset
 warm-up (typically 3–5 minutes for A3B on 16 H800s).
 
+### Low-memory dual-expert smoke test
+
+[`shell/train_u1/8B_dual_expert_smoke.sh`](shell/train_u1/8B_dual_expert_smoke.sh)
+is a short training-path validation for the 8B MoT model. It jointly trains
+the understanding and generation language experts while freezing the vision
+encoding / decoding modules. It is intended to verify checkpoint loading,
+packed data, both losses, distributed forward / backward, and the optimizer
+step before starting a full-size run.
+
+The memory-focused defaults are:
+
+| Setting | Default |
+|---|---|
+| Weight parallelism | `WP_SIZE=8` (also supports `4`) |
+| Sequence budget | `SEQ_LEN=1024` |
+| Images per packed sequence | `NUM_IMGS=4` |
+| Understanding / generation resolution | `256 × 256` |
+| Training steps | `TOTAL_STEPS=20` |
+| EMA | disabled |
+| Trainable modules | understanding + generation language experts |
+| Frozen modules | understanding ViT, generation vision model, `fm_head`, timestep / noise embedders, vision-to-LLM MLP |
+
+Set the checkpoint and tokenizer paths, then launch WP8 on eight GPUs:
+
+```bash
+WP_SIZE=8 \
+MODEL_NAME_OR_PATH=/path/to/SenseNova-U1-8B-MoT-SFT \
+VOCAB_FILE=/path/to/qwen3/tokenizer \
+bash shell/train_u1/8B_dual_expert_smoke.sh
+```
+
+Launch WP4 on four GPUs with:
+
+```bash
+WP_SIZE=4 \
+MODEL_NAME_OR_PATH=/path/to/SenseNova-U1-8B-MoT-SFT \
+VOCAB_FILE=/path/to/qwen3/tokenizer \
+bash shell/train_u1/8B_dual_expert_smoke.sh
+```
+
+The launcher requires the total rank count (`NPROC_PER_NODE × NNODES`) to
+equal `WP_SIZE`, because `tp_size=pp_size=1`. WP4 roughly doubles the sharded
+model / optimizer state per GPU relative to WP8: four 80 GB GPUs are expected
+to run out of memory during the optimizer step, while WP8 is the recommended
+smoke-test topology. As a planning estimate, WP8 peaks around 47–55 GB per GPU
+and WP4 around 92–100 GB per GPU; allocator behavior and batch composition can
+move the observed peak.
+
+The main settings can be overridden without editing the launcher:
+
+```bash
+WP_SIZE=8 \
+SEQ_LEN=1024 \
+NUM_IMGS=2 \
+TOTAL_STEPS=10 \
+MM_DATA_PATH=/path/to/data_meta.json \
+MODEL_NAME_OR_PATH=/path/to/SenseNova-U1-8B-MoT-SFT \
+VOCAB_FILE=/path/to/qwen3/tokenizer \
+bash shell/train_u1/8B_dual_expert_smoke.sh
+```
+
+`MM_DATA_PATH` defaults to `data/sample/sample_data_meta.json`. The sample
+assets must be downloaded as described in [Sample dataset](#sample-dataset-smoke-test).
+This launcher is only a smoke test; increase the sequence, image, resolution,
+and step budgets deliberately for a real training run.
+
 ---
 
 ## Tasks supported
