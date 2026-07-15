@@ -222,4 +222,15 @@ def get_model(model_args, data_args):
             ):
                 param.requires_grad = True
 
+    # Apply this after ``unfreeze_mot_gen`` so the generation-side vision
+    # encoder is not accidentally re-enabled by its ``mot_gen`` name.
+    if getattr(model_args, "freeze_vision_io", False):
+        logger.info("Freeze understanding and generation vision I/O modules")
+        if hasattr(model, "vision_model"):
+            model.vision_model = model.vision_model.eval()
+            _freeze_params(model.vision_model)
+        if hasattr(model, "fm_modules"):
+            model.fm_modules = model.fm_modules.eval()
+            _freeze_params(model.fm_modules)
+
     return model

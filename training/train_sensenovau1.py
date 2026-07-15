@@ -6,6 +6,12 @@ import time
 
 import torch
 
+try:
+    import torch_npu
+    from torch_npu.contrib import transfer_to_npu
+except ImportError:
+    pass
+
 from sensenovalm.accelerator import get_accelerator
 from sensenovalm.core.context import global_context as gpc
 from sensenovalm.core.trainer_builder import TrainerBuilder

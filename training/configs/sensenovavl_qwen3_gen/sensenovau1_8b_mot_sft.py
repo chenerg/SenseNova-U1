@@ -104,6 +104,7 @@ rm_all_think_token = env_bool('rm_all_think_token', False)
 freeze_llm = env_bool('freeze_llm', False)
 freeze_mlp = env_bool('freeze_mlp', False)
 freeze_backbone = env_bool('freeze_backbone', False)
+freeze_vision_io = env_bool('freeze_vision_io', False)
 train_buffer = env_bool('train_buffer', False)
 unfreeze_post_buffer = env_bool('unfreeze_post_buffer', False)
 unfreeze_mot_gen = env_bool('unfreeze_mot_gen', False)
@@ -136,6 +137,7 @@ cfg_is_uncond_drop_independent = env_bool('cfg_is_uncond_drop_independent', True
 
 # EMA of the unified model.
 ema_decay = float(os.environ.get('ema_decay', 0.999))
+enable_ema = env_bool('enable_ema', True)
 
 
 # -----------------------------------------------------------------------------
@@ -323,6 +325,7 @@ model = dict(
     freeze_llm=freeze_llm,
     freeze_mlp=freeze_mlp,
     freeze_backbone=freeze_backbone,
+    freeze_vision_io=freeze_vision_io,
     train_buffer=train_buffer,
     unfreeze_post_buffer=unfreeze_post_buffer,
     unfreeze_mot_gen=unfreeze_mot_gen,
@@ -405,7 +408,7 @@ model = dict(
 # EMA copy of the model
 # -----------------------------------------------------------------------------
 averaged_model = dict(
-    enable=True,
+    enable=enable_ema,
     decay=ema_decay,
     multi_avg_fn="ema",
     use_buffers=False,
