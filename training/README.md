@@ -60,9 +60,61 @@ and set at least:
 | Variable | Purpose |
 |---|---|
 | `MODEL_NAME_OR_PATH` | HF weights to initialize from (or `LLM_PATH` + `VIT_PATH` + `MLP_PATH` for component-wise loading) |
-| `VOCAB_FILE`, `TOKENIZER_PATH` | Qwen3 tokenizer directory (same path is fine for both) |
+| `VOCAB_FILE`, `TOKENIZER_PATH` | Tokenizer directory; the downloaded SFT model directory contains the required tokenizer files and can be used for both |
 | `mm_data_path` | dataset meta JSON (see `data/sample/sample_data_meta.json` for the schema) |
 | `JOB_NAME` | unique name for the run; outputs land under `RUN/$JOB_NAME/` |
+
+#### Prepare the checkpoint and tokenizer
+
+Download the complete
+[`sensenova/SenseNova-U1-8B-MoT-SFT`](https://huggingface.co/sensenova/SenseNova-U1-8B-MoT-SFT)
+repository before launching 8B training. The repository contains both the 16
+BF16 weight shards and all tokenizer files, so `MODEL_NAME_OR_PATH`,
+`VOCAB_FILE`, and `TOKENIZER_PATH` may point to the same local directory. A
+separate Qwen3 tokenizer download is not required.
+
+Install the current Hugging Face CLI and download the model to a shared,
+high-throughput filesystem with at least 45–50 GB free space:
+
+```bash
+python -m pip install -U huggingface_hub
+
+hf download \
+    sensenova/SenseNova-U1-8B-MoT-SFT \
+    --local-dir /data/models/SenseNova-U1-8B-MoT-SFT
+```
+
+The command supports resuming an interrupted download. On a slow connection,
+increase the Hub timeout before retrying:
+
+```bash
+export HF_HUB_DOWNLOAD_TIMEOUT=60
+```
+
+Verify the model index, tokenizer, and all 16 weight shards:
+
+```bash
+MODEL_DIR=/data/models/SenseNova-U1-8B-MoT-SFT
+
+test -f "${MODEL_DIR}/config.json"
+test -f "${MODEL_DIR}/model.safetensors.index.json"
+test -f "${MODEL_DIR}/tokenizer_config.json"
+test -f "${MODEL_DIR}/vocab.json"
+test -f "${MODEL_DIR}/merges.txt"
+
+test "$(find "${MODEL_DIR}" -maxdepth 1 -name 'model-*.safetensors' | wc -l)" -eq 16
+```
+
+Use the directory for all three launcher variables:
+
+```bash
+export MODEL_NAME_OR_PATH="${MODEL_DIR}"
+export VOCAB_FILE="${MODEL_DIR}"
+export TOKENIZER_PATH="${MODEL_DIR}"
+```
+
+The smoke launcher automatically defaults `TOKENIZER_PATH` to `VOCAB_FILE`,
+so only `MODEL_NAME_OR_PATH` and `VOCAB_FILE` need to be passed explicitly.
 
 Distributed topology is also env-var driven (defaults shown):
 
@@ -122,18 +174,22 @@ The memory-focused defaults are:
 Set the checkpoint and tokenizer paths, then launch WP8 on eight GPUs:
 
 ```bash
+MODEL_DIR=/data/models/SenseNova-U1-8B-MoT-SFT
+
 WP_SIZE=8 \
-MODEL_NAME_OR_PATH=/path/to/SenseNova-U1-8B-MoT-SFT \
-VOCAB_FILE=/path/to/qwen3/tokenizer \
+MODEL_NAME_OR_PATH="${MODEL_DIR}" \
+VOCAB_FILE="${MODEL_DIR}" \
 bash shell/train_u1/8B_dual_expert_smoke.sh
 ```
 
 Launch WP4 on four GPUs with:
 
 ```bash
+MODEL_DIR=/data/models/SenseNova-U1-8B-MoT-SFT
+
 WP_SIZE=4 \
-MODEL_NAME_OR_PATH=/path/to/SenseNova-U1-8B-MoT-SFT \
-VOCAB_FILE=/path/to/qwen3/tokenizer \
+MODEL_NAME_OR_PATH="${MODEL_DIR}" \
+VOCAB_FILE="${MODEL_DIR}" \
 bash shell/train_u1/8B_dual_expert_smoke.sh
 ```
 
@@ -148,13 +204,15 @@ move the observed peak.
 The main settings can be overridden without editing the launcher:
 
 ```bash
+MODEL_DIR=/data/models/SenseNova-U1-8B-MoT-SFT
+
 WP_SIZE=8 \
 SEQ_LEN=1024 \
 NUM_IMGS=2 \
 TOTAL_STEPS=10 \
 MM_DATA_PATH=/path/to/data_meta.json \
-MODEL_NAME_OR_PATH=/path/to/SenseNova-U1-8B-MoT-SFT \
-VOCAB_FILE=/path/to/qwen3/tokenizer \
+MODEL_NAME_OR_PATH="${MODEL_DIR}" \
+VOCAB_FILE="${MODEL_DIR}" \
 bash shell/train_u1/8B_dual_expert_smoke.sh
 ```
 
