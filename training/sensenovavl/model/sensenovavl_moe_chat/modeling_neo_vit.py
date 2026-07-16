@@ -23,7 +23,6 @@ from sensenovalm.model.moe.moe import SenseNovaVLMoE
 from sensenovalm.model.moe.utils import SenseNovaVLMoEOutput
 from sensenovalm.utils.common import get_current_device
 from sensenovavl.model.sensenovavl_moe_chat.configuration_neo_vit import NEOVisionConfig
-from sensenovavl.model.sensenovavl_moe_chat.flash_attention import FlashAttention
 from sensenovavl.model.sensenovavl_moe_chat.utils import (
     gather_forward_split_backward,
     get_split_size,
@@ -180,6 +179,12 @@ class InternVisionAttention(nn.Module):
         config: NEOVisionConfig,
     ):
         super().__init__()
+        # Import flash-attn only when the configuration actually constructs a
+        # ViT attention layer.  The shipped U1 configs use zero local ViT
+        # encoder layers, so their embedding-only vision path must not require
+        # the optional flash-attn package merely to import this module.
+        from sensenovavl.model.sensenovavl_moe_chat.flash_attention import FlashAttention
+
         self.config = config
         self.embed_dim = config.hidden_size
         self.num_heads = config.num_attention_heads
