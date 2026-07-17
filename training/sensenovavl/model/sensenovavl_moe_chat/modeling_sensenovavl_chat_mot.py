@@ -510,7 +510,9 @@ class SenseNovaVLChatMoTModel(PreTrainedModel):
         self.image_fold = config.image_fold
         self.ps_version = config.ps_version
         self.tp_mode = gpc.config.parallel.tensor.mode
-        self.tp_size = gpc.get_world_size(ParallelMode.TENSOR)
+        # ``PreTrainedModel.tp_size`` is a read-only Transformers property.
+        # Keep SenseNovaLM's tensor-parallel world size in a separate attribute.
+        self.sensenova_tp_size = gpc.get_world_size(ParallelMode.TENSOR)
         self.image_gen_loss_weight = config.image_gen_loss_weight
         vit_hidden_size = config.vision_config.hidden_size
         llm_hidden_size = config.llm_config.hidden_size
@@ -682,7 +684,7 @@ class SenseNovaVLChatMoTModel(PreTrainedModel):
 
                 # Synchronize random noise and timestep across TP ranks to ensure
                 # identical flow-matching targets for the same image on all ranks.
-                if self.tp_size > 1:
+                if self.sensenova_tp_size > 1:
                     tp_group = gpc.get_group(ParallelMode.TENSOR)
                     tp_ranks = gpc.get_ranks_in_group(ParallelMode.TENSOR)
                     dist.broadcast(cur_noise, src=tp_ranks[0], group=tp_group)
@@ -880,7 +882,7 @@ class SenseNovaVLChatMoTModel(PreTrainedModel):
                     zero_indexes = torch.zeros(indexes.shape[0], 2, dtype=indexes.dtype, device=indexes.device)
                     indexes =  torch.cat([indexes[:, None], zero_indexes], dim=-1)
                     # In ISP mode, indicators must match FULL sequence length
-                    if self.tp_mode == "isp" and self.tp_size > 1:
+                    if self.tp_mode == "isp" and self.sensenova_tp_size > 1:
                         full_seq_len = gather_forward_split_backward(input_ids.clone(), ParallelMode.TENSOR, dim=1).shape[1]
                         modality_indicators = torch.ones(full_seq_len, dtype=torch.long, device=input_ids.device) * -1
                         image_gen_indicators = torch.zeros(full_seq_len, dtype=torch.bool, device=input_ids.device).view(1, -1)
@@ -901,7 +903,7 @@ class SenseNovaVLChatMoTModel(PreTrainedModel):
                     # the 'True' in selected might be distributed across different rank unevenly.
                     # For example, tp rank0: [True, False, False]; tp rank1: [True, True, True].
                     # Therefore, we need to split the vit_embeds according to the selected.
-                    if self.tp_mode == "isp" and self.tp_size > 1:
+                    if self.tp_mode == "isp" and self.sensenova_tp_size > 1:
                         # ISP mode: gather to full sequence, align context tokens per-image,
                         # then pack/split later for local LLM compute.
                         merge_size = round(1 / self.downsample_ratio)
@@ -1142,7 +1144,7 @@ class SenseNovaVLChatMoTModel(PreTrainedModel):
                 )
             
             # NOTE:
-            if self.tp_mode == "isp" and self.tp_size > 1:
+            if self.tp_mode == "isp" and self.sensenova_tp_size > 1:
                 _full_input_ids = gather_forward_split_backward(input_ids.clone(), ParallelMode.TENSOR, dim=1)
                 _has_pad = _full_input_ids[0][-1] == 0
             else:
@@ -1242,7 +1244,7 @@ class SenseNovaVLChatMoTModel(PreTrainedModel):
                     dim=0,
                 )
 
-            if self.tp_mode == "isp" and self.tp_size > 1:
+            if self.tp_mode == "isp" and self.sensenova_tp_size > 1:
                 input_ids_packed = _full_input_ids[:, perm]
             else:
                 input_ids_packed = input_ids[:, perm]
@@ -1313,11 +1315,11 @@ class SenseNovaVLChatMoTModel(PreTrainedModel):
 
             sdpa_mask_for_llm = sdpa_mask
             padlen_for_llm = padlen
-            if self.tp_mode == "isp" and self.tp_size > 1:
+            if self.tp_mode == "isp" and self.sensenova_tp_size > 1:
                 packed_full_len = hidden_states_packed.shape[1]
-                packed_div = packed_full_len // self.tp_size
-                packed_mod = packed_full_len % self.tp_size
-                packed_split_sizes = get_split_size(self.tp_size, packed_div, packed_mod)
+                packed_div = packed_full_len // self.sensenova_tp_size
+                packed_mod = packed_full_len % self.sensenova_tp_size
+                packed_split_sizes = get_split_size(self.sensenova_tp_size, packed_div, packed_mod)
 
                 hidden_states_packed_for_llm = split_forward_gather_backward(
                     hidden_states_packed,
@@ -1424,7 +1426,7 @@ class SenseNovaVLChatMoTModel(PreTrainedModel):
 
             # In ISP mode, LLM output is local (ISP-split). Gather back to full
             # before unpacking (which requires full-sequence perm/inv_perm).
-            if self.tp_mode == "isp" and self.tp_size > 1:
+            if self.tp_mode == "isp" and self.sensenova_tp_size > 1:
                 packed_local_len = packed_split_sizes[gpc.get_local_rank(ParallelMode.TENSOR)]
                 if hidden_states_packed.shape[1] == packed_local_len:
                     hidden_states_packed = gather_forward_split_backward(
@@ -1594,11 +1596,11 @@ class SenseNovaVLChatMoTModel(PreTrainedModel):
         moe_outputs = outputs.moe_outputs
         seq_len = outputs.sequence_length
         
-        if self.tp_mode == "isp" and self.enable_vit_sp and self.tp_size > 1:
+        if self.tp_mode == "isp" and self.enable_vit_sp and self.sensenova_tp_size > 1:
             # all gather the sequence to conduct pixel shuffle
-            div_seq = seq_len // self.tp_size
-            mod_seq = seq_len % self.tp_size
-            seq_split_size = get_split_size(self.tp_size, div_seq, mod_seq)
+            div_seq = seq_len // self.sensenova_tp_size
+            mod_seq = seq_len % self.sensenova_tp_size
+            seq_split_size = get_split_size(self.sensenova_tp_size, div_seq, mod_seq)
             vit_embeds = gather_forward_split_backward(
                 vit_embeds,
                 ParallelMode.TENSOR,
@@ -1609,10 +1611,10 @@ class SenseNovaVLChatMoTModel(PreTrainedModel):
             )
 
         cls_embeds = None
-        if self.tp_mode == "isp" and self.enable_vit_sp and self.tp_size > 1:
+        if self.tp_mode == "isp" and self.enable_vit_sp and self.sensenova_tp_size > 1:
             vit_embeds = split_forward_gather_backward(vit_embeds, ParallelMode.TENSOR, dim=-2)
 
-        if self.tp_mode == "isp" and self.enable_vit_sp and self.tp_size > 1:
+        if self.tp_mode == "isp" and self.enable_vit_sp and self.sensenova_tp_size > 1:
             vit_embeds = gather_forward_split_backward(vit_embeds, ParallelMode.TENSOR, dim=-2)
 
         if return_cls:
