@@ -526,14 +526,16 @@ def args_sanity_check():
     # for GPU accelerator supports: 1）FA-True + Packed-True 2) FA-False + Packed-False
     if gpc.config.parallel["tensor"][
         "mode"
-    ] == TensorParallelMode.isp.name and sensenovalm_accelerator.get_accelerator_backend() in [
-        AcceleratorType.NPU,
-        AcceleratorType.DIPU,
-        AcceleratorType.DITORCH,
-    ]:
+    ] == TensorParallelMode.isp.name and gpc.config.parallel["tensor"]["size"] > 1:
+        unsupported_packed_backends = [
+            AcceleratorType.NPU,
+            AcceleratorType.DIPU,
+            AcceleratorType.DITORCH,
+        ]
+        accelerator_backend = sensenovalm_accelerator.get_accelerator_backend()
         assert (
-            gpc.config.data.use_packed_dataset is False
-        ), "only unpacked data is supported when tensor parallel mode is isp and accelerator type is NPU or DIPU"
+            accelerator_backend not in unsupported_packed_backends or gpc.config.data.use_packed_dataset is False
+        ), "only unpacked data is supported when ISP sequence parallel size is greater than 1 on NPU or DIPU"
 
     if sensenovalm_accelerator.get_accelerator_backend() in [
         AcceleratorType.NPU,
