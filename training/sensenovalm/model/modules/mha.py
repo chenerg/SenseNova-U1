@@ -30,14 +30,6 @@ from sensenovalm.utils.parallel import is_using_isp
 
 logger = get_logger(__file__)
 
-# NOTE:
-try:
-    from torch.nn.attention.flex_attention import flex_attention
-    flex_attention = torch.compile(flex_attention)
-except ImportError:
-    print("To enable flexattention, please install torch>=2.5.0")
-
-
 def safe_norm(norm, x, dtype):
     y = x.to(dtype)
     if y.numel() == 0:
@@ -964,7 +956,7 @@ class SWA(nn.Module):
 
         # NOTE:
         padlen = kwargs.pop("padlen", 0)
-        flex_mask = kwargs.pop("flex_mask", None)
+        sdpa_mask = kwargs.pop("flex_mask", None)
 
         kwargs = _convert_cu_seqlens_for_qksplited(kwargs)
 
@@ -1029,11 +1021,25 @@ class SWA(nn.Module):
             k = pad_sequence(k, padlen)
             v = pad_sequence(v, padlen)
 
-        context = flex_attention(
-            q, k, v, 
+        if sdpa_mask is None:
+            raise ValueError("SWA SDPA requires the dense attention mask passed as `flex_mask`.")
+        assert sdpa_mask.shape[-2:] == (q.shape[-2], k.shape[-2]), (sdpa_mask.shape, q.shape, k.shape)
+
+        # context = flex_attention(
+        #     q, k, v,
+        #     enable_gqa=True,
+        #     block_mask=flex_mask,
+        #     scale=1.0 / math.sqrt(q.size(-1) // 2),
+        # )
+        context = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=sdpa_mask,
+            dropout_p=self.inner_cross_attn_dropout if self.training else 0.0,
+            is_causal=False,
+            scale=1.0 / math.sqrt(q.size(-1) // 2),
             enable_gqa=True,
-            block_mask=flex_mask,
-            scale = 1.0 / math.sqrt(q.size(-1) // 2)
         )
 
         if padlen > 0:
@@ -1468,7 +1474,7 @@ class SWA_MoT(nn.Module):
 
         # NOTE:
         padlen = kwargs.pop("padlen", 0)
-        flex_mask = kwargs.pop("flex_mask", 0)
+        sdpa_mask = kwargs.pop("flex_mask", None)
 
         kwargs = _convert_cu_seqlens_for_qksplited(kwargs)
 
@@ -1545,11 +1551,25 @@ class SWA_MoT(nn.Module):
             k = pad_sequence(k, padlen)
             v = pad_sequence(v, padlen)
 
-        context = flex_attention(
-            q, k, v,
+        if sdpa_mask is None:
+            raise ValueError("SWA_MoT SDPA requires the dense attention mask passed as `flex_mask`.")
+        assert sdpa_mask.shape[-2:] == (q.shape[-2], k.shape[-2]), (sdpa_mask.shape, q.shape, k.shape)
+
+        # context = flex_attention(
+        #     q, k, v,
+        #     enable_gqa=True,
+        #     block_mask=flex_mask,
+        #     scale=1.0 / math.sqrt(q.size(-1)),
+        # )
+        context = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=sdpa_mask,
+            dropout_p=self.inner_cross_attn_dropout if self.training else 0.0,
+            is_causal=False,
+            scale=1.0 / math.sqrt(q.size(-1)),
             enable_gqa=True,
-            block_mask=flex_mask,
-            scale = 1.0 / math.sqrt(q.size(-1))
         )
 
         if padlen > 0:

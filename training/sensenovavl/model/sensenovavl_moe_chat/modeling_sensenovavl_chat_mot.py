@@ -212,6 +212,60 @@ def create_flex_mask_padding_image_gen(document_ids, modality_indicators, image_
     return block_mask, padlen
 
 
+def create_sdpa_mask_padding_image_gen(
+    document_ids,
+    modality_indicators,
+    image_gen_indicators,
+    token_pos,
+    dup_boundary,
+    div_num,
+    mask_image_gen_tokens=False,
+):
+    """Build the dense boolean mask equivalent to ``create_flex_mask_padding_image_gen``.
+
+    PyTorch SDPA interprets ``True`` as an allowed query/key pair. The returned
+    mask has shape ``[1, 1, S, S]`` so it broadcasts over batch and attention
+    heads. Unlike FlexAttention's block-sparse mask, this representation uses
+    quadratic memory and is intended only when the SDPA backend is required.
+    """
+    slen = document_ids.size(-1)
+    padlen = calculate_pad_length(seqlen=slen, div_num=div_num)
+    if padlen > 0:
+        pad_doc_id = document_ids.max() + 1
+        document_ids = F.pad(document_ids, (0, padlen), value=pad_doc_id)
+        modality_indicators = F.pad(modality_indicators, (0, padlen), value=-1)
+        image_gen_indicators = F.pad(image_gen_indicators, (0, padlen), value=False)
+        dup_boundary = F.pad(dup_boundary, (0, padlen), value=False)
+        token_pos = F.pad(token_pos, (0, padlen), value=token_pos.max() + 1)
+
+    padded_len = slen + padlen
+    q_idx = torch.arange(padded_len, device=document_ids.device)[:, None]
+    kv_idx = torch.arange(padded_len, device=document_ids.device)[None, :]
+
+    same_doc = document_ids[q_idx] == document_ids[kv_idx]
+    causal = token_pos[q_idx] >= token_pos[kv_idx]
+    same_img = (
+        (modality_indicators[q_idx] > 0)
+        & (modality_indicators[q_idx] == modality_indicators[kv_idx])
+        & same_doc
+    )
+    allowed = (causal & same_doc) | same_img
+
+    kv_is_gen = image_gen_indicators[kv_idx]
+    q_is_gen = image_gen_indicators[q_idx]
+    same_img_for_gen = (modality_indicators[q_idx] == modality_indicators[kv_idx]) & same_doc
+    gen_gate = ((~kv_is_gen) | (q_is_gen & same_img_for_gen)) & (
+        (~q_is_gen) | kv_is_gen | (token_pos[kv_idx] != token_pos[q_idx])
+    )
+    allowed &= gen_gate
+    allowed &= ~dup_boundary[kv_idx]
+
+    if mask_image_gen_tokens:
+        allowed &= ~kv_is_gen
+
+    return allowed[None, None, :, :].contiguous(), padlen
+
+
 def build_dup_boundary(modality_indicators, gen_tok, dup_tok):
     dup_boundary = torch.zeros_like(gen_tok)
 
@@ -1166,7 +1220,14 @@ class SenseNovaVLChatMoTModel(PreTrainedModel):
                 )
                 token_pos_packed = torch.cat([pad_pos, token_pos_packed], dim=0)
 
-            flex_mask, padlen = create_flex_mask_padding_image_gen(document_ids_packed, modality_indicators=modality_indicators_packed, image_gen_indicators=image_gen_indicators_packed.view(-1), token_pos=token_pos_packed, dup_boundary=dup_boundary_packed, div_num=128, compile_mask=True)
+            sdpa_mask, padlen = create_sdpa_mask_padding_image_gen(
+                document_ids_packed,
+                modality_indicators=modality_indicators_packed,
+                image_gen_indicators=image_gen_indicators_packed.view(-1),
+                token_pos=token_pos_packed,
+                dup_boundary=dup_boundary_packed,
+                div_num=128,
+            )
 
             def _build_cu_seqlens_from_doc_ids(doc_ids: torch.Tensor) -> torch.Tensor:
                 if doc_ids.numel() == 0:
@@ -1250,7 +1311,7 @@ class SenseNovaVLChatMoTModel(PreTrainedModel):
                         sum(_totals),
                     )
 
-            flex_mask_for_llm = flex_mask
+            sdpa_mask_for_llm = sdpa_mask
             padlen_for_llm = padlen
             if self.tp_mode == "isp" and self.tp_size > 1:
                 packed_full_len = hidden_states_packed.shape[1]
@@ -1332,7 +1393,7 @@ class SenseNovaVLChatMoTModel(PreTrainedModel):
                 cu_seqlens=cu_seqlens, # NOTE:
                 indexes=indexes_packed_for_llm,
                 max_seqlen=kwargs["max_seqlen"],
-                flex_mask=flex_mask_for_llm,    # NOTE:
+                flex_mask=sdpa_mask_for_llm,    # NOTE: dense bool mask consumed by SDPA
                 padlen=padlen_for_llm,    # NOTE:
                 inference_params=inference_params,
                 gen_image_inds=None,
