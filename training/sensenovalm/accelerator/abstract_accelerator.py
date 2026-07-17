@@ -6,7 +6,7 @@ Universal accelerator interface implementation, inspired by DeepSpeed.
 """
 
 import enum
-import os
+import importlib.util
 
 
 class AcceleratorType(enum.Enum):
@@ -80,18 +80,16 @@ class Accelerator:
 
 
 def get_accelerator():
-    # This (open-source) build only supports the CUDA backend.
     global sensenovalm_accelerator
     if sensenovalm_accelerator is not None:
         return sensenovalm_accelerator
 
-    accelerator_name = os.environ.get("SENSENOVALM_ACCELERATOR", "cuda")
-    if accelerator_name != "cuda":
-        raise ValueError(
-            f"Only the 'cuda' accelerator is supported, but SENSENOVALM_ACCELERATOR='{accelerator_name}'."
-        )
+    if importlib.util.find_spec("torch_npu") is not None:
+        from .npu_accelerator import NPU_Accelerator
 
-    from .cuda_accelerator import CUDA_Accelerator
+        sensenovalm_accelerator = NPU_Accelerator()
+    else:
+        from .cuda_accelerator import CUDA_Accelerator
 
-    sensenovalm_accelerator = CUDA_Accelerator()
+        sensenovalm_accelerator = CUDA_Accelerator()
     return sensenovalm_accelerator
