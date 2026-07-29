@@ -230,6 +230,7 @@ and step budgets deliberately for a real training run.
 | `mm_t2i` |  Text-to-image generation |
 | `mm_it2i` |  Image editing (single- or multi-input) |
 | `mm_interleave_gen` | Interleaved text + image generation |
+| `mm_video_gen` | First-frame-conditioned video generation |
 | `mm_interleaved` | Interleaved text/image understanding |
 | `multimodal` (OCR, VQA, …) |  Generic multimodal understanding |
 
@@ -299,6 +300,52 @@ For real training, prepare your own data in the same schema:
 3. Set `mm_data_path` to that meta JSON in your shell script.
 
 A standalone data-prep guide is on the TODO list; PRs welcome.
+
+### RMBench video-generation annotations
+
+Use `scripts/prepare_rmbench_mm_video_gen.py` to create `mm_video_gen`
+annotations from RMBench datasets already converted to LeRobot:
+
+```bash
+python -m pip install pyarrow
+
+python scripts/prepare_rmbench_mm_video_gen.py \
+    --lerobot-root /path/to/RMBench/policy/Mem-0/lerobot_datasets \
+    --rmbench-data-root /path/to/RMBench/data \
+    --output-jsonl /path/to/output/rmbench_mm_video_gen.jsonl \
+    --output-meta /path/to/output/rmbench_mm_video_gen_meta.json \
+    --max-num-frame 128
+```
+
+`--lerobot-root` may point to one task dataset or to the parent containing
+multiple task datasets. `--rmbench-data-root` is optional, but supplying it
+lets M(n) tasks use `language_annotation.json` to preserve exact subtask
+boundaries, including adjacent segments with identical text. Without it, the
+script recovers boundaries from LeRobot's `subtask_end` window and prints a
+warning because consecutive short, identical segments cannot always be
+distinguished.
+
+Each output JSONL line contains the fields consumed by `mm_video_gen`:
+
+```json
+{
+  "video": "battery_try/videos/chunk-000/observation.image.head_camera/episode_000000.mp4",
+  "clip": [0.0, 3.3],
+  "conversations": [
+    {"from": "human", "value": "Global task: ...\nCurrent subtask: ..."},
+    {"from": "gpt", "value": ""}
+  ],
+  "task": "battery_try",
+  "episode_id": 0,
+  "subtask_index": 0,
+  "clip_index": 0
+}
+```
+
+The per-line `task`, `episode_id`, `subtask_index`, and `clip_index` fields
+are provenance metadata and are ignored by the trainer. In contrast, the
+generated meta JSON must keep `"task": "video_gen"` so the dataset is routed
+to the `mm_video_gen` loader.
 
 ---
 
