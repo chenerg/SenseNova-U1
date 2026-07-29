@@ -304,38 +304,55 @@ A standalone data-prep guide is on the TODO list; PRs welcome.
 ### RMBench video-generation annotations
 
 Use `scripts/prepare_rmbench_mm_video_gen.py` to create `mm_video_gen`
-annotations from RMBench datasets already converted to LeRobot:
+annotations directly from the raw RMBench task directories:
 
 ```bash
-python -m pip install pyarrow
-
 python scripts/prepare_rmbench_mm_video_gen.py \
-    --lerobot-root /path/to/RMBench/policy/Mem-0/lerobot_datasets \
-    --rmbench-data-root /path/to/RMBench/data \
+    --rmbench-root /path/to/RMBench/data \
     --output-jsonl /path/to/output/rmbench_mm_video_gen.jsonl \
     --output-meta /path/to/output/rmbench_mm_video_gen_meta.json \
     --max-num-frame 128
 ```
 
-`--lerobot-root` may point to one task dataset or to the parent containing
-multiple task datasets. `--rmbench-data-root` is optional, but supplying it
-lets M(n) tasks use `language_annotation.json` to preserve exact subtask
-boundaries, including adjacent segments with identical text. Without it, the
-script recovers boundaries from LeRobot's `subtask_end` window and prints a
-warning because consecutive short, identical segments cannot always be
-distinguished.
+`--rmbench-root` may point either to one task such as `battery_try`, or to the
+parent containing multiple task directories. Each task is expected to use the
+following layout:
+
+```text
+battery_try/
+└── demo_clean/
+    ├── data/episode0.hdf5
+    ├── instructions/episode0.json
+    ├── language_annotation.json
+    └── video/episode0.mp4
+```
+
+Tasks may also contain a `demo_clean_200/` directory with the same internal
+layout. When both directories exist, both are converted independently;
+overlapping episode IDs are retained and distinguished by the JSONL `demo`
+field and video path.
+
+The script matches `episodeN.mp4` with `episode_N` in
+`language_annotation.json` and reads FPS and frame count from the MP4. Every
+task uses those annotations to preserve exact subtask boundaries, including
+adjacent segments with identical text. For each episode, the global task is
+selected randomly from the non-empty strings in `instructions/episodeN.json`
+under `seen`; `unseen` is never used. Use `--seed` to make this selection
+reproducible. Pass `--fps 30` only when the video metadata is missing or must be
+overridden. HDF5 trajectory files are not read.
 
 Each output JSONL line contains the fields consumed by `mm_video_gen`:
 
 ```json
 {
-  "video": "battery_try/videos/chunk-000/observation.image.head_camera/episode_000000.mp4",
+  "video": "battery_try/demo_clean/video/episode0.mp4",
   "clip": [0.0, 3.3],
   "conversations": [
     {"from": "human", "value": "Global task: ...\nCurrent subtask: ..."},
     {"from": "gpt", "value": ""}
   ],
   "task": "battery_try",
+  "demo": "demo_clean",
   "episode_id": 0,
   "subtask_index": 0,
   "clip_index": 0
