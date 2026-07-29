@@ -41,9 +41,9 @@ from sensenovavl.data.distributed_sampler import DistributedSampler
 
 from sensenovavl.data.multimodal_dataset import (
     build_datasets,
+    get_dataset_type_ids_map,
     image_pair_collator,
 )
-from sensenovalm.data.utils import get_dataset_type_ids_map
 from sensenovalm.core.context import ParallelMode
 from sensenovalm.core.context import global_context as gpc
 from sensenovalm.utils.logger import get_logger
@@ -123,6 +123,11 @@ def get_multimodal_streaming_train_loader_items(data_cfg):   # NOTE:
     logger.info(f"{num_new_tokens=}, {len(tokenizer)=}")
 
     gpc.tokenizer = tokenizer
+
+    with open(data_cfg.meta_path) as file:
+        ds_collections = json.load(file)
+    _, mm_type2typeid = get_dataset_type_ids_map(ds_collections, type_id_offset=0)
+    data_cfg._add_item("mm_type2typeid", mm_type2typeid)
 
     if gpc.get_local_rank(ParallelMode.COMMON_DATA) > 0:
         return None, None, None, None

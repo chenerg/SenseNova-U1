@@ -1490,6 +1490,20 @@ class SenseNovaVLChatMoTModel(PreTrainedModel):
             losses_for_log_only["image_gen_loss_t2i"] = image_gen_loss_t2i
             losses_for_log_only["image_gen_loss_editing"] = image_gen_loss_editing
             losses_for_log_only["image_gen_loss_interleave"] = image_gen_loss_interleave
+            video_gen_type_id = gpc.config.data.get("mm_type2typeid", {}).get(
+                "mm_video_gen"
+            )
+            if video_gen_type_id is not None:
+                image_gen_loss_video_indicators = (
+                    image_gen_type_ids == video_gen_type_id
+                )
+                image_gen_loss_video = global_all_reduce_loss(
+                    image_gen_loss[pad_dummy_image_num:][
+                        image_gen_loss_video_indicators
+                    ].sum(),
+                    image_gen_loss_video_indicators.sum(),
+                )
+                losses_for_log_only["image_gen_loss_video"] = image_gen_loss_video
 
             image_gen_loss_weight = []
             for image_i in range(len(image_for_gen_flags[0])):

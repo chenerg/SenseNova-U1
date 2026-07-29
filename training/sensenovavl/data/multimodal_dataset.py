@@ -22,8 +22,9 @@ from sensenovavl.data.constants import (
 from sensenovavl.data.dataset import (
     WeightedConcatDataset,
     build_transform,
-    preprocess_sensenovalm_v3,
     dynamic_preprocess_native_resolution,
+    get_video_gen_sample_times,
+    preprocess_sensenovalm_v3,
 )
 
 from .dataset_interleaved_iterable import (
@@ -43,6 +44,13 @@ from .cfg_cond_drop_utils import *
 # global llm logger
 logger = get_logger(__file__)
 
+IMAGE_GEN_TASK_TYPES = {
+    "mm_t2i",
+    "mm_it2i",
+    "mm_interleave_gen",
+    "mm_video_gen",
+}
+
 
 def seconds_to_minutes_secondswithdot(seconds):
     minutes = int(seconds // 60)
@@ -54,6 +62,41 @@ def seconds_to_minutes_seconds(seconds):
     minutes = int(seconds // 60)
     secs = seconds % 60
     return f"{int(minutes):02d}:{int(secs):02d}"
+
+
+def build_video_gen_prompt(sample_slots, duplicate_intermediate=False):
+    """Build the assistant-side frame-control prompt from regular sample slots."""
+    lines = []
+    last_index = len(sample_slots) - 1
+    for index, sample_slot in enumerate(sample_slots):
+        image_tokens = "<image>"
+        if duplicate_intermediate and 0 < index < last_index:
+            image_tokens += "<image>"
+        lines.append(f"{seconds_to_minutes_secondswithdot(sample_slot)}]:{image_tokens}")
+    return "\n".join(lines)
+
+
+def expand_video_gen_frames(logical_frames):
+    """Expand future frames with clean teacher-forcing duplicates."""
+    if len(logical_frames) < 2:
+        raise ValueError(
+            f"video generation requires at least two logical frames, got {len(logical_frames)}"
+        )
+
+    frames = []
+    image_for_gen_flags = []
+    duplicate_flags = []
+    last_index = len(logical_frames) - 1
+    for index, frame in enumerate(logical_frames):
+        frames.append(frame)
+        image_for_gen_flags.append(index > 0)
+        duplicate_flags.append(False)
+        if 0 < index < last_index:
+            frames.append(frame)
+            image_for_gen_flags.append(False)
+            duplicate_flags.append(True)
+
+    return frames, image_for_gen_flags, duplicate_flags
 
 
 class LazySupervisedDataset(Dataset):
@@ -666,7 +709,7 @@ class LazySupervisedDataset(Dataset):
             )
 
         task_type = self.typeid2type[self.type_id]
-        is_image_gen_task = task_type in ["mm_t2i", "mm_it2i", "mm_interleave_gen"]
+        is_image_gen_task = task_type in IMAGE_GEN_TASK_TYPES
 
         if "image" in data_item:
             if isinstance(data_item["image"], list):
@@ -1107,6 +1150,184 @@ class LazySupervisedDataset(Dataset):
         )
         return ret
 
+    def video_gen_get_item(self, data_item):
+        forbidden_fields = {"sample_fps", "frame_timestamps"}
+        present_forbidden_fields = forbidden_fields.intersection(data_item)
+        if present_forbidden_fields:
+            raise ValueError(
+                "video generation sample timing is dataset-controlled; remove fields "
+                f"{sorted(present_forbidden_fields)}"
+            )
+        if not isinstance(data_item.get("video"), str) or not data_item["video"]:
+            raise ValueError("video generation requires a non-empty video path")
+        if "clip" not in data_item:
+            raise ValueError("video generation requires clip=[start, end]")
+
+        conversations = data_item.get("conversations")
+        if (
+            not isinstance(conversations, list)
+            or len(conversations) != 2
+            or conversations[0].get("from") != "human"
+            or conversations[1].get("from") != "gpt"
+        ):
+            raise ValueError("video generation conversations must contain exactly one human turn and one gpt turn")
+        if conversations[1].get("value") != "":
+            raise ValueError("video generation gpt value must be empty; the dataset builds it dynamically")
+        if any(
+            token in conversation.get("value", "")
+            for conversation in conversations
+            for token in ("<image>", "<video>")
+        ):
+            raise ValueError("video generation JSONL conversations must not contain pre-expanded visual tokens")
+
+        video_path = (
+            os.path.join(self.root, data_item["video"])
+            if self.root is not None
+            else data_item["video"]
+        )
+        sample_fps = random.randint(1, 2)
+        expected_sample_slots, _ = get_video_gen_sample_times(
+            data_item["clip"], sample_fps
+        )
+        if (
+            self.max_num_frame > 0
+            and len(expected_sample_slots) > self.max_num_frame
+        ):
+            raise ValueError(
+                f"video generation logical frame count {len(expected_sample_slots)} "
+                f"exceeds max_num_frame {self.max_num_frame}"
+            )
+        (
+            logical_frames,
+            _,
+            _,
+            _,
+            sample_slots,
+            _,
+            _,
+        ) = self.tcs_loader(
+            video_path,
+            image_type="video_gen",
+            max_num_frames=self.max_num_frame,
+            clip=data_item["clip"],
+            sample_fps=sample_fps,
+        )
+        if sample_slots != expected_sample_slots:
+            raise ValueError(
+                f"video loader returned unexpected sample slots: {sample_slots} != {expected_sample_slots}"
+            )
+        physical_frames, image_for_gen_flags, duplicate_flags = expand_video_gen_frames(
+            logical_frames
+        )
+        image_for_gen_loss_flags = list(image_for_gen_flags)
+
+        data_item = deepcopy(data_item)
+        data_item["conversations"][1]["value"] = build_video_gen_prompt(
+            sample_slots, duplicate_intermediate=True
+        )
+
+        if self.dynamic_image_version == "native_resolution":
+            assert not self.pad2square, "pad2square is not supported for native resolution"
+            transform = build_transform(
+                is_train=self.is_train,
+                input_size=self.image_size,
+                pad2square=self.pad2square,
+                resize=False,
+            )
+        else:
+            transform = build_transform(
+                is_train=self.is_train,
+                input_size=self.image_size,
+                pad2square=self.pad2square,
+            )
+
+        images = []
+        num_tiles = []
+        num_image = len(physical_frames)
+        max_pixels = (
+            self.max_pixels_gen
+            if num_image == 1
+            else max(
+                min(
+                    self.max_pixels_gen,
+                    (self.max_tokens - 3072) * 32 * 32 // num_image,
+                ),
+                self.min_pixels_gen,
+            )
+        )
+        for frame, is_duplicate in zip(physical_frames, duplicate_flags):
+            if is_duplicate:
+                images.append(images[-1])
+                num_tiles.append(num_tiles[-1])
+                continue
+            if self.dynamic_image_size:
+                if self.dynamic_image_version != "native_resolution":
+                    raise NotImplementedError(
+                        f"dynamic_image_version must be 'native_resolution', got {self.dynamic_image_version!r}"
+                    )
+                image = dynamic_preprocess_native_resolution(
+                    frame,
+                    min_pixels=self.min_pixels_gen,
+                    max_pixels=max_pixels,
+                    size_factor=int(self.patch_size / self.downsample_ratio),
+                )
+                w, h = image.size
+                num_tiles.append(
+                    int(w * h // self.patch_size**2 * self.downsample_ratio**2)
+                )
+            else:
+                image = frame
+                num_tiles.append(1)
+            images.append(image)
+
+        pixel_values = []
+        for image, is_duplicate in zip(images, duplicate_flags):
+            if is_duplicate:
+                pixel_values.append(pixel_values[-1])
+            else:
+                pixel_values.append(transform(image))
+        if not self.dynamic_image_size:
+            pixel_values = torch.stack(pixel_values)
+
+        if self.dynamic_image_size and self.dynamic_image_version == "native_resolution":
+            num_image_tokens = list(num_tiles)
+        else:
+            num_image_tokens = [self.num_image_token * num_tile for num_tile in num_tiles]
+
+        ret = self.preprocess_function(
+            self.template_name,
+            deepcopy(data_item),
+            self.tokenizer,
+            num_image_tokens,
+            use_packed_ds=True,
+            ds_name=self.ds_name,
+            num_image=num_image,
+            cfg_drop=False,
+        )
+        actual_image_token_count = (
+            ret["input_ids"][0] == self.image_context_token_id
+        ).sum()
+        if actual_image_token_count != sum(num_image_tokens):
+            raise ValueError(
+                f"video generation tokens are truncated, this dataset is {self.ds_name}: "
+                f"{actual_image_token_count} != {sum(num_image_tokens)}"
+            )
+        ret["labels"][0].fill_(IGNORE_INDEX)
+
+        return dict(
+            input_ids=ret["input_ids"][0],
+            labels=ret["labels"][0],
+            pixel_values=pixel_values,
+            image_flags=torch.tensor([1] * num_image, dtype=torch.long),
+            image_for_gen_flags=torch.tensor(image_for_gen_flags, dtype=torch.bool),
+            image_for_gen_loss_flags=torch.tensor(
+                image_for_gen_loss_flags, dtype=torch.bool
+            ),
+            is_image_duplicated_for_und_flags=torch.tensor(
+                duplicate_flags, dtype=torch.bool
+            ),
+        )
+
     def check_interleave_data(self, data_item, image_path_list):
         if len(image_path_list) > 40:
             return False
@@ -1212,7 +1433,10 @@ class LazySupervisedDataset(Dataset):
             )
             return None
         try:
-            if "image" in data_item or "images" in data_item:
+            task_type = self.typeid2type[self.type_id]
+            if task_type == "mm_video_gen":
+                ret = self.video_gen_get_item(data_item)
+            elif "image" in data_item or "images" in data_item:
                 ret = self.multi_modal_get_item(data_item)
             elif (
                 "video" in data_item
@@ -1231,7 +1455,7 @@ class LazySupervisedDataset(Dataset):
                 )
             if (ret["labels"] == IGNORE_TOKEN_ID).all() and self.typeid2type[
                 self.type_id
-            ] not in ["mm_t2i", "mm_it2i", "mm_interleave_gen"]:
+            ] not in IMAGE_GEN_TASK_TYPES:
                 # do not have
                 sample_conv = "|-|".join(
                     [c["value"] for c in data_item["conversations"]]
@@ -1279,6 +1503,8 @@ class LazySupervisedDataset(Dataset):
                         ]
                     else:
                         data_path = os.path.join(tmp_root, data_item["image"])
+                elif "video" in data_item:
+                    data_path = os.path.join(tmp_root, data_item["video"])
 
                 logger.info(
                     f"[{self.ds_name}] [Worker id {self.worker_id}] skip data with image {data_path} for exception(first 200 char): {str(e)[:200]}"

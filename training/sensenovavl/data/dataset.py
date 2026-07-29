@@ -202,6 +202,83 @@ def read_frames_decord(video_path, num_frames, sample="rand", fix_start=None, cl
     return frames, duration, real_fps, sample_fps, timestamps
 
 
+def get_video_gen_sample_times(clip, sample_fps):
+    """Return regular prompt slots and clip-clamped decode timestamps."""
+    if not isinstance(clip, (list, tuple)) or len(clip) != 2:
+        raise ValueError("video generation requires clip=[start, end]")
+    if isinstance(sample_fps, bool) or not isinstance(sample_fps, int) or sample_fps not in (1, 2):
+        raise ValueError(f"video generation sample_fps must be 1 or 2, got {sample_fps!r}")
+
+    start, end = clip
+    if (
+        isinstance(start, bool)
+        or isinstance(end, bool)
+        or not isinstance(start, (int, float))
+        or not isinstance(end, (int, float))
+    ):
+        raise ValueError(f"video generation clip values must be numeric, got {clip!r}")
+    start, end = float(start), float(end)
+    if not math.isfinite(start) or not math.isfinite(end) or start < 0 or start >= end:
+        raise ValueError(f"invalid video generation clip: {clip!r}")
+
+    clip_duration = end - start
+    num_slots = math.ceil(clip_duration * sample_fps) + 1
+    sample_slots = [i / sample_fps for i in range(num_slots)]
+    decode_timestamps = [start + min(slot, clip_duration) for slot in sample_slots]
+    return sample_slots, decode_timestamps
+
+
+def read_frames_decord_at_timestamps(video_path, timestamps):
+    """Decode the requested timestamps in order, retaining duplicate frame indices."""
+    video_reader = VideoReader(video_path, num_threads=1)
+    vlen = len(video_reader)
+    if vlen < 2:
+        raise ValueError(f"video must contain at least two frames, got {vlen}")
+
+    fps = float(video_reader.get_avg_fps())
+    if not math.isfinite(fps) or fps <= 0:
+        raise ValueError(f"invalid video FPS: {fps}")
+    video_duration = vlen / fps
+
+    frame_indices = []
+    for timestamp in timestamps:
+        if timestamp < 0 or timestamp > video_duration:
+            raise ValueError(
+                f"decode timestamp {timestamp} is outside video duration [0, {video_duration}]"
+            )
+        frame_indices.append(min(max(int(round(timestamp * fps)), 0), vlen - 1))
+
+    frames = video_reader.get_batch(frame_indices).asnumpy()
+    frames = [Image.fromarray(frames[i]) for i in range(frames.shape[0])]
+    return frames, video_duration, fps, frame_indices
+
+
+def read_frames_decord_video_gen(video_path, clip, sample_fps, max_num_frames):
+    """Decode an exact first-frame-conditioned video generation clip."""
+    sample_slots, decode_timestamps = get_video_gen_sample_times(clip, sample_fps)
+    if max_num_frames > 0 and len(sample_slots) > max_num_frames:
+        raise ValueError(
+            f"video generation logical frame count {len(sample_slots)} exceeds max_num_frame {max_num_frames}"
+        )
+
+    frames, video_duration, fps, frame_indices = read_frames_decord_at_timestamps(
+        video_path, decode_timestamps
+    )
+    start, end = (float(value) for value in clip)
+    if end > video_duration:
+        raise ValueError(f"clip end {end} exceeds video duration {video_duration}")
+
+    return (
+        frames,
+        end - start,
+        fps,
+        sample_fps,
+        sample_slots,
+        decode_timestamps,
+        frame_indices,
+    )
+
+
 def extract_frame_number(filename):
     # Extract the numeric part from the filename using regular expressions
     match = re.search(r"_(\d+).jpg$", filename)
@@ -277,7 +354,16 @@ class TCSLoader(object):
     def __init__(self):
         pass
 
-    def __call__(self, fn, image_type="image", max_num_frames=-1, min_num_frames=4, sample="rand", clip=None):
+    def __call__(
+        self,
+        fn,
+        image_type="image",
+        max_num_frames=-1,
+        min_num_frames=4,
+        sample="rand",
+        clip=None,
+        sample_fps=None,
+    ):
         if image_type == "image":
             return Image.open(fn).convert("RGB")
 
@@ -296,6 +382,14 @@ class TCSLoader(object):
                 frames, duration, fps, t_fps, timestamps = read_frames_decord(fn, num_frames=max_num_frames, min_num_frames=min_num_frames,
                                             sample=sample, clip=clip)
             return frames, duration, fps, t_fps, timestamps
+        elif image_type == "video_gen":
+            return read_frames_decord_video_gen(
+                fn,
+                clip=clip,
+                sample_fps=sample_fps,
+                max_num_frames=max_num_frames,
+            )
+        raise ValueError(f"unsupported image_type: {image_type!r}")
 
 
 def expand2square(pil_img, background_color):
