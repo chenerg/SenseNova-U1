@@ -167,13 +167,44 @@ JOB_NAME=rmbench_video_sft \
 bash shell/train_u1/8B_rmbench.sh
 ```
 
-The launcher fixes weight parallelism at WP8 (`wp=8`, `tp=1`, `pp=1`) and
-therefore requires exactly eight total ranks. Understanding and generation
-inputs both allow native resolutions up to 512x512. EMA and random MoT
-generation-branch initialization are disabled. The understanding vision model
-and the language-model output head remain frozen; the language experts,
-generation vision model, flow-matching head, and timestep/noise embedders are
-trainable.
+The launcher fixes weight parallelism at WP8 (`wp=8`, `tp=1`, `pp=1`). The
+default eight-rank launch uses `WDP=1`; larger launches are supported when the
+total rank count is divisible by eight. For example, a single 16-GPU node uses
+`WP=8`, `WDP=2`, and, because `zero1_size=-1`, `ZeRO1=2`:
+
+```bash
+MODEL_DIR=/data/models/SenseNova-U1-8B-MoT-SFT
+DATA_META=/shared/datasets/RMBench/generated/rmbench_mm_video_gen_meta.json
+
+NPROC_PER_NODE=16 \
+NNODES=1 \
+NODE_RANK=0 \
+MASTER_ADDR=127.0.0.1 \
+MODEL_NAME_OR_PATH="${MODEL_DIR}" \
+VOCAB_FILE="${MODEL_DIR}" \
+TOKENIZER_PATH="${MODEL_DIR}" \
+MM_DATA_PATH="${DATA_META}" \
+JOB_NAME=rmbench_video_sft_16gpu \
+bash shell/train_u1/8B_rmbench.sh
+```
+
+With the current `micro_bsz=1`, `GRAD_ACCM=1`, `tp=1`, and `pp=1`, every
+global rank consumes one packed sequence, so the effective global batch is 8
+for the default launch and 16 for the single-node example above. The 16-GPU
+topology lowers optimizer-state memory through `ZeRO1=2`, but does not shard
+the `SEQ_LEN=28672` activations. As a planning estimate, allow approximately
+50–60 GiB per GPU and prefer 80 GB accelerators.
+
+The config currently starts eight DataLoader workers per rank. A 16-GPU launch
+therefore creates 128 workers on the node; reduce `num_workers` in
+`configs/sensenovavl_qwen3_gen/sensenovau1_8b_mot_sft.py` if CPU, host-memory,
+shared-memory, or filesystem pressure becomes a bottleneck.
+
+Understanding and generation inputs both allow native resolutions up to
+512x512. EMA and random MoT generation-branch initialization are disabled.
+The understanding vision model and the language-model output head remain
+frozen; the language experts, generation vision model, flow-matching head, and
+timestep/noise embedders are trainable.
 
 The defaults are `LR=2e-5`, `TOTAL_STEPS=2000`, `WARMUP_STEPS=100`,
 `MAX_NUM_FRAME_GEN=8`, `NUM_IMGS=144`, and `SEQ_LEN=28672`. Video-generation

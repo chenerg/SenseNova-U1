@@ -7,9 +7,6 @@
 #   MM_DATA_PATH=/datasets/RMBench/generated/rmbench_mm_video_gen_meta.json \
 #   bash shell/train_u1/8B_rmbench.sh
 #
-# The total rank count must remain 8 because this launcher fixes weight
-# parallelism to WP8.
-
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -20,12 +17,6 @@ export NNODES="${NNODES:-1}"
 export NODE_RANK="${NODE_RANK:-0}"
 export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 export MASTER_PORT="${MASTER_PORT:-29500}"
-
-WORLD_SIZE=$((NPROC_PER_NODE * NNODES))
-if [[ "${WORLD_SIZE}" -ne 8 ]]; then
-  echo "WP8 with tp=1 and pp=1 requires exactly 8 total ranks; got ${WORLD_SIZE}." >&2
-  exit 1
-fi
 
 # ------------------------------ Model/data ------------------------------
 export CONFIG_NAME="configs/sensenovavl_qwen3_gen/sensenovau1_8b_mot_sft.py"
