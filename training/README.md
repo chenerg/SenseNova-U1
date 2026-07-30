@@ -167,10 +167,11 @@ JOB_NAME=rmbench_video_sft \
 bash shell/train_u1/8B_rmbench.sh
 ```
 
-The launcher fixes weight parallelism at WP8 (`wp=8`, `tp=1`, `pp=1`). The
-default eight-rank launch uses `WDP=1`; larger launches are supported when the
-total rank count is divisible by eight. For example, a single 16-GPU node uses
-`WP=8`, `WDP=2`, and, because `zero1_size=-1`, `ZeRO1=2`:
+The launcher defaults to WP8 (`WP_SIZE=8`, `tp=1`, `pp=1`), and `WP_SIZE` can
+be overridden at launch time. The default eight-rank launch uses `WDP=1`;
+larger launches are supported when the total rank count is divisible by
+`WP_SIZE`. For example, a single 16-GPU node with `WP_SIZE=8` uses `WP=8`,
+`WDP=2`, and, because `zero1_size=-1`, `ZeRO1=2`:
 
 ```bash
 MODEL_DIR=/data/models/SenseNova-U1-8B-MoT-SFT
@@ -180,6 +181,7 @@ NPROC_PER_NODE=16 \
 NNODES=1 \
 NODE_RANK=0 \
 MASTER_ADDR=127.0.0.1 \
+WP_SIZE=8 \
 MODEL_NAME_OR_PATH="${MODEL_DIR}" \
 VOCAB_FILE="${MODEL_DIR}" \
 TOKENIZER_PATH="${MODEL_DIR}" \

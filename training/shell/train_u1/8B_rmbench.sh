@@ -46,7 +46,7 @@ export resume_ds="${RESUME_DS:-false}"
 
 # ----------------------------- Parallelism -----------------------------
 export zero1_size=-1
-export wp_size=8
+export wp_size="${WP_SIZE:-8}"
 export tp_size=1
 export pp_size=1
 
