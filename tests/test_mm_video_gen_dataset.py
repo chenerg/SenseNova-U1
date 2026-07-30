@@ -68,6 +68,15 @@ def test_exact_grid_endpoint_has_no_extra_slot():
     assert decode_times[-1] == 13.0
 
 
+def test_near_grid_endpoint_has_no_extra_slot_from_float_error():
+    clip = [13.46666667, 16.966666670000002]
+
+    slots, decode_times = video_dataset.get_video_gen_sample_times(clip, 2)
+
+    assert slots == [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]
+    assert decode_times[-1] == pytest.approx(clip[1])
+
+
 def test_prompt_uses_regular_slot_for_padded_endpoint():
     slots, _ = video_dataset.get_video_gen_sample_times([10.0, 13.2], 1)
 

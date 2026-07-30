@@ -222,7 +222,11 @@ def get_video_gen_sample_times(clip, sample_fps):
         raise ValueError(f"invalid video generation clip: {clip!r}")
 
     clip_duration = end - start
-    num_slots = math.ceil(clip_duration * sample_fps) + 1
+    scaled_duration = clip_duration * sample_fps
+    nearest_interval_count = round(scaled_duration)
+    if math.isclose(scaled_duration, nearest_interval_count, rel_tol=0.0, abs_tol=1e-8):
+        scaled_duration = nearest_interval_count
+    num_slots = math.ceil(scaled_duration) + 1
     sample_slots = [i / sample_fps for i in range(num_slots)]
     decode_timestamps = [start + min(slot, clip_duration) for slot in sample_slots]
     return sample_slots, decode_timestamps
