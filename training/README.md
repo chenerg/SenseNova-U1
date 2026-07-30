@@ -11,7 +11,9 @@
 ├── train_sensenovau1.py           # entry point
 ├── configs/sensenovavl_qwen3_gen/ # 8B + A3B training configs (env-var driven)
 ├── shell/                         # torchrun launchers
-│   └── train_u1/{8B,A3B}.sh       # per-model env-var presets + torchrun call
+│   └── train_u1/                   # per-model/task env-var presets
+│       ├── {8B,A3B}.sh             # general training launchers
+│       └── 8B_rmbench.sh           # RMBench mm_video_gen fine-tuning
 ├── sensenovalm/                   # training framework (derived from InternEvo)
 │   ├── core/                      # trainer, scheduler, parallel context
 │   ├── checkpoint/                # save/resume, HF-format conversion
@@ -148,6 +150,35 @@ NNODES=2 NODE_RANK=1 MASTER_ADDR=10.0.0.1 bash shell/train_u1/A3B.sh
 Outputs are written to `RUN/$JOB_NAME/$TIMESTAMP/{logs,tensorboards,shell}/`.
 A successful run prints `step=0 loss=…` after model load and dataset
 warm-up (typically 3–5 minutes for A3B on 16 H800s).
+
+### RMBench 8B video-generation fine-tuning
+
+Use `shell/train_u1/8B_rmbench.sh` with the generated RMBench dataset meta:
+
+```bash
+MODEL_DIR=/data/models/SenseNova-U1-8B-MoT-SFT
+DATA_META=/shared/datasets/RMBench/generated/rmbench_mm_video_gen_meta.json
+
+MODEL_NAME_OR_PATH="${MODEL_DIR}" \
+VOCAB_FILE="${MODEL_DIR}" \
+TOKENIZER_PATH="${MODEL_DIR}" \
+MM_DATA_PATH="${DATA_META}" \
+JOB_NAME=rmbench_video_sft \
+bash shell/train_u1/8B_rmbench.sh
+```
+
+The launcher fixes weight parallelism at WP8 (`wp=8`, `tp=1`, `pp=1`) and
+therefore requires exactly eight total ranks. Understanding and generation
+inputs both allow native resolutions up to 512x512. EMA and random MoT
+generation-branch initialization are disabled. The understanding vision model
+and the language-model output head remain frozen; the language experts,
+generation vision model, flow-matching head, and timestep/noise embedders are
+trainable.
+
+The defaults are `LR=2e-5`, `TOTAL_STEPS=2000`, `WARMUP_STEPS=100`,
+`MAX_NUM_FRAME_GEN=8`, `NUM_IMGS=144`, and `SEQ_LEN=28672`. Video-generation
+clips with more logical frames are cropped to a random contiguous window.
+Uppercase variables may be supplied at launch time to override these values.
 
 ### Low-memory dual-expert smoke test
 

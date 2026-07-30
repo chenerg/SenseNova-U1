@@ -158,6 +158,7 @@ def get_multimodal_streaming_train_loader_items(data_cfg):   # NOTE:
         use_thumbnail=data_cfg.use_thumbnail,
         min_num_frame=getattr(data_cfg, 'min_num_frame', 4),
         max_num_frame=getattr(data_cfg, 'max_num_frame', 24),
+        max_num_frame_gen=getattr(data_cfg, 'max_num_frame_gen', None),
         min_dynamic_patch=data_cfg.min_dynamic_patch,
         max_dynamic_patch=data_cfg.max_dynamic_patch,
         data_augment=getattr(data_cfg, "data_augment", True),

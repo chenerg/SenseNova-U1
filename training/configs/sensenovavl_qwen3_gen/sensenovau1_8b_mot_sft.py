@@ -72,6 +72,7 @@ print(f'will use conv_style {conv_style}')
 
 min_num_frame = int(os.environ.get('min_num_frame', '4'))
 max_num_frame = int(os.environ.get('max_num_frame', '24'))
+max_num_frame_gen = int(os.environ.get('max_num_frame_gen', max_num_frame))
 
 max_pixels = int(os.environ.get('max_pixels', None))
 min_pixels = int(os.environ.get('min_pixels', None))
@@ -105,6 +106,7 @@ freeze_llm = env_bool('freeze_llm', False)
 freeze_mlp = env_bool('freeze_mlp', False)
 freeze_backbone = env_bool('freeze_backbone', False)
 freeze_vision_io = env_bool('freeze_vision_io', False)
+freeze_lm_head = env_bool('freeze_lm_head', False)
 train_buffer = env_bool('train_buffer', False)
 unfreeze_post_buffer = env_bool('unfreeze_post_buffer', False)
 unfreeze_mot_gen = env_bool('unfreeze_mot_gen', False)
@@ -248,6 +250,7 @@ data = dict(
     min_pixels_gen=min_pixels_gen,
     min_num_frame=min_num_frame,
     max_num_frame=max_num_frame,
+    max_num_frame_gen=max_num_frame_gen,
     min_dynamic_patch=1,
     max_dynamic_patch=12,
     # packing
@@ -326,6 +329,7 @@ model = dict(
     freeze_mlp=freeze_mlp,
     freeze_backbone=freeze_backbone,
     freeze_vision_io=freeze_vision_io,
+    freeze_lm_head=freeze_lm_head,
     train_buffer=train_buffer,
     unfreeze_post_buffer=unfreeze_post_buffer,
     unfreeze_mot_gen=unfreeze_mot_gen,

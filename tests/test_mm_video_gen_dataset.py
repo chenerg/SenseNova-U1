@@ -139,6 +139,7 @@ def _make_video_gen_dataset(monkeypatch, sample_fps):
     dataset = object.__new__(LazySupervisedDataset)
     dataset.root = "/dataset"
     dataset.max_num_frame = 32
+    dataset.max_num_frame_gen = 32
     dataset.dynamic_image_version = "fixed"
     dataset.pad2square = False
     dataset.is_train = False
@@ -237,6 +238,38 @@ def test_video_gen_item_masks_ce_and_keeps_future_flow_targets(monkeypatch, samp
     fake_flow_matching_loss = generation_targets.float().square().mean()
     assert generation_targets.shape[0] == len(slots) - 1
     assert fake_flow_matching_loss.item() > 0
+
+
+def test_video_gen_randomly_crops_contiguous_logical_frames(monkeypatch):
+    dataset, captured = _make_video_gen_dataset(monkeypatch, sample_fps=2)
+    dataset.max_num_frame_gen = 8
+
+    def randint(start, end):
+        if (start, end) == (1, 2):
+            return 2
+        assert (start, end) == (0, 5)
+        return 3
+
+    monkeypatch.setattr(multimodal_dataset.random, "randint", randint)
+    data_item = {
+        "video": "clip.mp4",
+        "clip": [10.0, 16.0],
+        "conversations": [
+            {"from": "human", "value": "Task: keep walking."},
+            {"from": "gpt", "value": ""},
+        ],
+    }
+
+    result = dataset.video_gen_get_item(data_item)
+
+    assert captured["loader_kwargs"]["clip"] == [11.5, 15.0]
+    assert captured["loader_kwargs"]["max_num_frames"] == 8
+    expected_slots = [index / 2 for index in range(8)]
+    assert captured["assistant_prompt"] == build_video_gen_prompt(
+        expected_slots, duplicate_intermediate=True
+    )
+    assert result["image_for_gen_flags"].sum().item() == 7
+    assert result["pixel_values"].shape[0] == 14
 
 
 def test_video_gen_get_sample_allows_all_ignored_labels(monkeypatch):

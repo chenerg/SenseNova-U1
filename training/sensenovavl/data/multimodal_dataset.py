@@ -76,6 +76,23 @@ def build_video_gen_prompt(sample_slots, duplicate_intermediate=False):
     return "\n".join(lines)
 
 
+def crop_video_gen_clip(clip, sample_fps, max_num_frames):
+    """Randomly select a contiguous logical-frame window from a video clip."""
+    sample_slots, decode_timestamps = get_video_gen_sample_times(clip, sample_fps)
+    if max_num_frames < 2:
+        if max_num_frames <= 0:
+            return clip
+        raise ValueError(
+            f"video generation max_num_frames must be at least 2 or non-positive, got {max_num_frames}"
+        )
+    if len(sample_slots) <= max_num_frames:
+        return clip
+
+    start_index = random.randint(0, len(sample_slots) - max_num_frames)
+    end_index = start_index + max_num_frames - 1
+    return [decode_timestamps[start_index], decode_timestamps[end_index]]
+
+
 def expand_video_gen_frames(logical_frames):
     """Expand future frames with clean teacher-forcing duplicates."""
     if len(logical_frames) < 2:
@@ -124,6 +141,7 @@ class LazySupervisedDataset(Dataset):
         min_dynamic_patch=1,
         max_dynamic_patch=12,
         max_num_frame=128,
+        max_num_frame_gen=None,
         min_num_frame=1,
         max_dynamic_images=4,
         max_multi_image_dynamic_patch=12,
@@ -162,6 +180,9 @@ class LazySupervisedDataset(Dataset):
         self.is_train = is_train
         self.pad2square = pad2square
         self.max_num_frame = max_num_frame
+        self.max_num_frame_gen = (
+            max_num_frame if max_num_frame_gen is None else max_num_frame_gen
+        )
         self.min_num_frame = min_num_frame
         self.sampling_method = sampling_method
 
@@ -1186,17 +1207,15 @@ class LazySupervisedDataset(Dataset):
             else data_item["video"]
         )
         sample_fps = random.randint(1, 2)
-        expected_sample_slots, _ = get_video_gen_sample_times(
-            data_item["clip"], sample_fps
+        max_num_frame_gen = getattr(
+            self, "max_num_frame_gen", self.max_num_frame
         )
-        if (
-            self.max_num_frame > 0
-            and len(expected_sample_slots) > self.max_num_frame
-        ):
-            raise ValueError(
-                f"video generation logical frame count {len(expected_sample_slots)} "
-                f"exceeds max_num_frame {self.max_num_frame}"
-            )
+        selected_clip = crop_video_gen_clip(
+            data_item["clip"], sample_fps, max_num_frame_gen
+        )
+        expected_sample_slots, _ = get_video_gen_sample_times(
+            selected_clip, sample_fps
+        )
         (
             logical_frames,
             _,
@@ -1208,8 +1227,8 @@ class LazySupervisedDataset(Dataset):
         ) = self.tcs_loader(
             video_path,
             image_type="video_gen",
-            max_num_frames=self.max_num_frame,
-            clip=data_item["clip"],
+            max_num_frames=max_num_frame_gen,
+            clip=selected_clip,
             sample_fps=sample_fps,
         )
         if sample_slots != expected_sample_slots:
@@ -1653,15 +1672,19 @@ def build_datasets(
     max_dynamic_patch=6,
     min_num_frame=8,
     max_num_frame=24,
+    max_num_frame_gen=None,
     data_augment=True,
     type_id_offset=0,
 ):
     datasets = []
     lengths = []
+    if max_num_frame_gen is None:
+        max_num_frame_gen = max_num_frame
 
     if gpc.is_rank_for_log():
         print(
-            f"Please note...  max_num_frame: {max_num_frame}, min_num_frame: {min_num_frame}"
+            f"Please note... max_num_frame: {max_num_frame}, max_num_frame_gen: {max_num_frame_gen}, "
+            f"min_num_frame: {min_num_frame}"
         )
 
     with open(data_args.meta_path) as file:
@@ -1777,6 +1800,7 @@ def build_datasets(
                 ),
                 min_num_frame=min_num_frame,
                 max_num_frame=max_num_frame,
+                max_num_frame_gen=max_num_frame_gen,
                 repeat_time=ds_collections[ds_name]["repeat_time"],
                 random_seed=ds_idx,
                 type_id=ds2typeid[ds_name],

@@ -77,6 +77,7 @@ print(f'will use conv_style {conv_style}')
 
 min_num_frame = int(os.environ.get('min_num_frame', '4'))
 max_num_frame = int(os.environ.get('max_num_frame', '24'))
+max_num_frame_gen = int(os.environ.get('max_num_frame_gen', max_num_frame))
 
 max_pixels = int(os.environ.get('max_pixels', None))
 min_pixels = int(os.environ.get('min_pixels', None))
@@ -276,6 +277,7 @@ data = dict(
     min_pixels_gen=min_pixels_gen,
     min_num_frame=min_num_frame,
     max_num_frame=max_num_frame,
+    max_num_frame_gen=max_num_frame_gen,
     min_dynamic_patch=1,
     max_dynamic_patch=12,
     # packing

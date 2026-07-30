@@ -178,6 +178,16 @@ def get_model(model_args, data_args):
         for param in module.parameters():
             param.requires_grad = False
 
+    def _set_lm_head_trainable(language_model, trainable):
+        found = False
+        for attr_name in ("output", "lm_head"):
+            head = getattr(language_model, attr_name, None)
+            if head is not None:
+                for param in head.parameters():
+                    param.requires_grad = trainable
+                found = True
+        return found
+
     if model_args.freeze_backbone:
         if hasattr(model, "vision_model"):
             model.vision_model = model.vision_model.eval()
@@ -188,9 +198,14 @@ def get_model(model_args, data_args):
             model.language_model = model.language_model.eval()
             _freeze_params(model.language_model)
 
+    if getattr(model_args, "freeze_lm_head", False):
+        if hasattr(model, "language_model"):
+            logger.info("Freeze language-model output head")
+            _set_lm_head_trainable(model.language_model, False)
+
     if model_args.unfreeze_lm_head:
         if hasattr(model, "language_model"):
-            model.language_model.output.requires_grad = True
+            _set_lm_head_trainable(model.language_model, True)
 
     if model_args.freeze_mlp:
         if hasattr(model, "mlp1"):
