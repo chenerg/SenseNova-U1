@@ -211,31 +211,6 @@ def segments_from_language_annotations(
     return segments
 
 
-def split_segment(segment: Segment, fps: float, max_num_frame: int) -> list[tuple[int, int, int]]:
-    """Split an interval so both 1 FPS and 2 FPS training sampling remain within the frame budget."""
-
-    if max_num_frame < 2:
-        raise ValueError(f"max_num_frame must be at least 2, got {max_num_frame}")
-    if not math.isfinite(fps) or fps <= 0:
-        raise ValueError(f"invalid video FPS: {fps}")
-    if segment.end_frame <= segment.start_frame:
-        raise ValueError(f"subtask {segment.subtask_index} must contain at least two frames")
-
-    max_frame_span = math.floor((max_num_frame - 1) * fps / 2)
-    if max_frame_span < 1:
-        raise ValueError(f"max_num_frame={max_num_frame} is too small for video FPS {fps}")
-
-    clips = []
-    clip_start = segment.start_frame
-    clip_index = 0
-    while clip_start < segment.end_frame:
-        clip_end = min(segment.end_frame, clip_start + max_frame_span)
-        clips.append((clip_start, clip_end, clip_index))
-        clip_start = clip_end
-        clip_index += 1
-    return clips
-
-
 def build_human_prompt(global_task: str, subtask: str) -> str:
     return f"Global task: {global_task}\nCurrent subtask: {subtask}"
 
@@ -249,32 +224,30 @@ def build_samples_for_episode(
     episode_id: int,
     global_task: str,
     video_info: VideoInfo,
-    max_num_frame: int,
 ) -> list[dict[str, Any]]:
     samples = []
     for segment in segments:
-        for start_frame, end_frame, clip_index in split_segment(segment, video_info.fps, max_num_frame):
-            samples.append(
-                {
-                    "video": video_path_for_json,
-                    "clip": [
-                        round(start_frame / video_info.fps, 8),
-                        round(end_frame / video_info.fps, 8),
-                    ],
-                    "conversations": [
-                        {
-                            "from": "human",
-                            "value": build_human_prompt(global_task, segment.text),
-                        },
-                        {"from": "gpt", "value": ""},
-                    ],
-                    "task": task_name,
-                    "demo": demo_name,
-                    "episode_id": episode_id,
-                    "subtask_index": segment.subtask_index,
-                    "clip_index": clip_index,
-                }
-            )
+        samples.append(
+            {
+                "video": video_path_for_json,
+                "clip": [
+                    round(segment.start_frame / video_info.fps, 8),
+                    round(segment.end_frame / video_info.fps, 8),
+                ],
+                "conversations": [
+                    {
+                        "from": "human",
+                        "value": build_human_prompt(global_task, segment.text),
+                    },
+                    {"from": "gpt", "value": ""},
+                ],
+                "task": task_name,
+                "demo": demo_name,
+                "episode_id": episode_id,
+                "subtask_index": segment.subtask_index,
+                "clip_index": 0,
+            }
+        )
     return samples
 
 
@@ -284,7 +257,6 @@ def convert_task(
     rmbench_root: Path,
     rng: random.Random,
     fps_override: float | None,
-    max_num_frame: int,
     skip_invalid: bool,
     stats: ConversionStats,
 ) -> list[dict[str, Any]]:
@@ -310,7 +282,6 @@ def convert_task(
                         episode_id=episode_id,
                         global_task=global_task,
                         video_info=video_info,
-                        max_num_frame=max_num_frame,
                     )
                 )
                 stats.episodes += 1
@@ -382,7 +353,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         help="Override video FPS; by default each MP4's metadata is used.",
     )
-    parser.add_argument("--max-num-frame", type=int, default=128)
     parser.add_argument("--seed", type=int, help="Seed for choosing a global task from each seen list.")
     parser.add_argument("--repeat-time", type=float, default=1.0)
     parser.add_argument("--dataset-name", default="rmbench_mm_video_gen")
@@ -404,8 +374,6 @@ def main() -> int:
         raise ValueError(f"--rmbench-root is not a directory: {rmbench_root}")
     if args.fps is not None and (not math.isfinite(args.fps) or args.fps <= 0):
         raise ValueError("--fps must be a positive finite number")
-    if args.max_num_frame < 2:
-        raise ValueError("--max-num-frame must be at least 2")
     if args.repeat_time <= 0:
         raise ValueError("--repeat-time must be positive")
     if not args.dataset_name:
@@ -423,7 +391,6 @@ def main() -> int:
                 rmbench_root=rmbench_root,
                 rng=rng,
                 fps_override=args.fps,
-                max_num_frame=args.max_num_frame,
                 skip_invalid=args.skip_invalid,
                 stats=stats,
             )

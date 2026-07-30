@@ -125,20 +125,20 @@ def test_language_annotation_length_must_match_video():
         )
 
 
-def test_split_segment_respects_two_fps_frame_budget():
-    segment = converter.Segment(0, 300, "task", 0)
+def test_build_samples_keeps_full_original_subtask_length():
+    samples = converter.build_samples_for_episode(
+        segments=[converter.Segment(0, 300, "task", 0)],
+        video_path_for_json="task/demo_clean/video/episode0.mp4",
+        task_name="task",
+        demo_name="demo_clean",
+        episode_id=0,
+        global_task="global task",
+        video_info=converter.VideoInfo(fps=30, frame_count=301),
+    )
 
-    clips = converter.split_segment(segment, fps=30, max_num_frame=5)
-
-    assert clips == [
-        (0, 60, 0),
-        (60, 120, 1),
-        (120, 180, 2),
-        (180, 240, 3),
-        (240, 300, 4),
-    ]
-    for start, end, _ in clips:
-        assert converter.math.ceil(((end - start) / 30) * 2) + 1 <= 5
+    assert len(samples) == 1
+    assert samples[0]["clip"] == [0.0, 10.0]
+    assert samples[0]["clip_index"] == 0
 
 
 def test_convert_task_keeps_same_episode_ids_from_both_demo_directories(monkeypatch, tmp_path):
@@ -157,7 +157,6 @@ def test_convert_task_keeps_same_episode_ids_from_both_demo_directories(monkeypa
         rmbench_root=rmbench_root,
         rng=random.Random(0),
         fps_override=None,
-        max_num_frame=128,
         skip_invalid=False,
         stats=converter.ConversionStats(),
     )
@@ -196,8 +195,6 @@ def test_main_uses_seen_global_task_and_annotated_subtasks(monkeypatch, tmp_path
             str(output_jsonl),
             "--output-meta",
             str(output_meta),
-            "--max-num-frame",
-            "128",
             "--seed",
             "123",
         ],

@@ -372,8 +372,7 @@ annotations directly from the raw RMBench task directories:
 python scripts/prepare_rmbench_mm_video_gen.py \
     --rmbench-root /path/to/RMBench/data \
     --output-jsonl /path/to/output/rmbench_mm_video_gen.jsonl \
-    --output-meta /path/to/output/rmbench_mm_video_gen_meta.json \
-    --max-num-frame 128
+    --output-meta /path/to/output/rmbench_mm_video_gen_meta.json
 ```
 
 `--rmbench-root` may point either to one task such as `battery_try`, or to the
@@ -401,7 +400,9 @@ adjacent segments with identical text. For each episode, the global task is
 selected randomly from the non-empty strings in `instructions/episodeN.json`
 under `seen`; `unseen` is never used. Use `--seed` to make this selection
 reproducible. Pass `--fps 30` only when the video metadata is missing or must be
-overridden. HDF5 trajectory files are not read.
+overridden. Each subtask is emitted at its full original length; the preparation
+script does not split or truncate clips based on a maximum frame count. HDF5
+trajectory files are not read.
 
 Each output JSONL line contains the fields consumed by `mm_video_gen`:
 
